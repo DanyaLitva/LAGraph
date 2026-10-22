@@ -1038,6 +1038,13 @@ typedef struct
     } data;
 } AllPathsElem;
 
+// One derivation-tree choice used by the CFL single-path algorithms.
+typedef struct
+{
+    size_t height;
+    GrB_Index middle;
+} PathIndex;
+
 // Flags for indecies of EWCNF rules
 enum {
     LAGraph_EWNCF_INDEX_NONTERM = 1 << 0,
@@ -1280,6 +1287,17 @@ GrB_Info LAGraph_CFL_reachability_adv
     char *msg,                       // Message string for error reporting.
     int8_t optimizations             // Optimizations flags
 ) ;
+
+GrB_Info LAGraph_CFL_single_path_adv(
+    GrB_Matrix *outputs,
+    GrB_Type *path_index_t,
+    const GrB_Matrix *adj_matrices,
+    size_t symbols_amount,
+    const LAGraph_rule_EWCNF *rules,
+    size_t rules_count,
+    char *msg,
+    int8_t optimizations
+);
 
 GrB_Info LAGraph_CFL_AllPaths_adv(
     GrB_Matrix *outputs, 
