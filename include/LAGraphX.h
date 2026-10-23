@@ -1296,7 +1296,7 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
 // do outputs = NULL, all_paths_ptr_t = NULL after LAGraph_CFL_AllPaths_adv_free_outputs
 GrB_Info LAGraph_CFL_AllPaths_adv_free_outputs(
   GrB_Matrix* outputs,
-  int64_t nonterms_count,
+  int64_t symbols_amount,
   GrB_Type* all_paths_ptr_t);
 
 //------------------------------------------------------------------------------

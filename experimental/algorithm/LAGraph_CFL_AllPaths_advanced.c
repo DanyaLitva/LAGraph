@@ -224,7 +224,7 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
     GRB_TRY(GrB_Scalar_setElement_UDT(bottom_scalar, (void*)(&bottom)));
 
     GRB_TRY(GrB_BinaryOp_new(&AllPaths_add, (void*)add_all_paths, AllPaths_type, AllPaths_type, AllPaths_type));
-    GRB_TRY(GrB_Monoid_new(&AllPaths_monoid, AllPaths_add, (void*)(&bottom)));
+    GRB_TRY(GrB_Monoid_new_UDT(&AllPaths_monoid, AllPaths_add, (void*)(&bottom)));
 
     GRB_TRY(GxB_IndexBinaryOp_new(&IAllPaths_mult, (void*)mult_all_paths_post, AllPaths_type, 
                                   GrB_BOOL, GrB_BOOL, GrB_BOOL, "mult_all_paths_post", MULT_PATH_POST_INDEX_DEFN));
@@ -240,11 +240,14 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
     LAGraph_Calloc((void**)&outputs_reachability, symbols_amount, sizeof(GrB_Matrix), msg);
     LG_TRY(LAGraph_CFL_reachability_adv(outputs_reachability, adj_matrices, symbols_amount, rules, rules_count, msg, optimizations));
 
+    int32_t format;
+    GRB_TRY(GrB_get(adj_matrices[0], &format, GrB_STORAGE_ORIENTATION_HINT));
+
     LG_TRY(LAGraph_Calloc((void**)&reachability_matrices, symbols_amount, sizeof(GrB_Matrix), msg));
     for (size_t i = 0; i < symbols_amount; i++) {
         reachability_matrices[i] = outputs_reachability[i] != NULL ? outputs_reachability[i] : adj_matrices[i];
         if (outputs_reachability[i] != NULL) {
-            GRB_TRY(GrB_set(outputs_reachability[i], GrB_ROWMAJOR,
+            GRB_TRY(GrB_set(outputs_reachability[i], format,
                             GrB_STORAGE_ORIENTATION_HINT));
         }
     }
@@ -402,13 +405,13 @@ static void free_AllPaths_matrix(GrB_Matrix* ptr_output)
 
 // Free outputs and all_paths_ptr_t after you have finished working with the output matrices from LAGraph_CFL_AllPaths.
 // do outputs = NULL, all_paths_ptr_t = NULL after LAGraph_CFL_AllPaths_free_outputs
-GrB_Info LAGraph_CFL_AllPaths_adv_free_outputs(GrB_Matrix* outputs, int64_t nonterms_count, GrB_Type* all_paths_ptr_t)
+GrB_Info LAGraph_CFL_AllPaths_adv_free_outputs(GrB_Matrix* outputs, int64_t symbols_amount, GrB_Type* all_paths_ptr_t)
 {
 #if GxB_IMPLEMENTATION < GxB_VERSION(9, 4, 5)
   return (GrB_NOT_IMPLEMENTED);
 #else
   if (outputs) {
-    for (size_t i = 0; i < nonterms_count; i++) {
+    for (size_t i = 0; i < symbols_amount; i++) {
       if (outputs[i] == NULL)
         continue;
       free_AllPaths_matrix(&outputs[i]);
