@@ -94,6 +94,22 @@ typedef enum CFL_Matrix_block Matrix_block;
 
 GrB_Info matrix_print_lazy(Matrix *A, int8_t optimizations);
 
+// Frees the stale copy after a write into one format only
+static GrB_Info matrix_drop_other_format(Matrix *matrix) {
+    if (!matrix->is_both) {
+        return GrB_SUCCESS;
+    }
+
+    if (matrix->base == matrix->base_row) {
+        TRY(GrB_Matrix_free(&matrix->base_col));
+    } else {
+        TRY(GrB_Matrix_free(&matrix->base_row));
+    }
+    matrix->is_both = false;
+
+    return GrB_SUCCESS;
+}
+
 GrB_Info matrix_to_format(Matrix *matrix, int32_t format, bool is_both) {
     TRY(CFL_matrix_update(matrix));
 
@@ -360,7 +376,7 @@ GrB_Info block_matrix_hyper_rotate_i(Matrix *matrix, enum CFL_Matrix_block forma
             TRY(GxB_Matrix_build_Scalar(new, nrows, ncols, scalar_true, matrix->nvals));
             matrix->base_col = new;
         }
-        matrix->format = GrB_ROWMAJOR;
+        matrix->format = matrix->base_row != NULL ? GrB_ROWMAJOR : GrB_COLMAJOR;
     }
     TRY(CFL_matrix_update(matrix));
     // TRY(CFL_matrix_free(matrix_p));
@@ -507,6 +523,13 @@ GrB_Info CFL_matrix_to_base(Matrix **matrix_p, Matrix *input, int8_t optimizatio
 
     Matrix *matrix;
     TRY(CFL_matrix_create_lazy(&matrix, input->nrows, input->ncols));
+    GrB_Info info = LAGraph_Realloc((void **)&matrix->base_matrices,
+                                    input->base_matrices_count,
+                                    matrix->base_matrices_count, sizeof(Matrix *), NULL);
+    if (info < GrB_SUCCESS) {
+        TRY(CFL_matrix_free(&matrix));
+        return info;
+    }
     TRY(CFL_matrix_free(&matrix->base_matrices[0]));
     matrix->base_matrices_count = 0;
 
@@ -534,9 +557,50 @@ GrB_Info CFL_matrix_to_base(Matrix **matrix_p, Matrix *input, int8_t optimizatio
     return GrB_SUCCESS;
 }
 
+GrB_Info CFL_matrix_extract_base(GrB_Matrix *base, Matrix *matrix, int8_t optimizations) {
+    if (matrix->is_lazy) {
+        // GraphBLAS never adds sparse matrices in-place: each addition builds a new
+        // matrix, so its cost depends on the size of both operands. Smaller base
+        // matrices are summed first (from the smallest one), and the largest base
+        // matrix is added only once at the end
+        TRY(matrix_sort_lazy(matrix, false));
+
+        size_t last = matrix->base_matrices_count - 1;
+        Matrix *largest = matrix->base_matrices[last];
+        if (last > 0) {
+            Matrix *acc = matrix->base_matrices[0];
+            for (size_t i = 1; i < last; i++) {
+                TRY(CFL_wise(acc, acc, matrix->base_matrices[i], false, optimizations));
+            }
+
+            TRY(CFL_wise(largest, largest, acc, false, optimizations));
+        }
+
+        TRY(CFL_matrix_extract_base(base, largest, optimizations));
+        return GrB_SUCCESS;
+    }
+
+    // Matrix contains both formats, so free the one that is not extracted
+    if (matrix->is_both) {
+        GrB_Matrix other =
+            matrix->base == matrix->base_row ? matrix->base_col : matrix->base_row;
+        TRY(GrB_Matrix_free(&other));
+    }
+
+    *base = matrix->base;
+    matrix->base = NULL;
+    matrix->base_row = NULL;
+    matrix->base_col = NULL;
+    matrix->is_both = false;
+    matrix->nvals = 0;
+
+    return GrB_SUCCESS;
+}
+
 GrB_Info matrix_combine_lazy(Matrix *A, size_t threshold, int8_t optimizations) {
     Matrix **new_matrices;
-    TRY(LAGraph_Calloc((void **)&new_matrices, 50, sizeof(Matrix *), NULL));
+    TRY(LAGraph_Calloc((void **)&new_matrices, A->base_matrices_count,
+                       sizeof(Matrix *), NULL));
 
     size_t new_size = 0;
 
@@ -654,8 +718,7 @@ GrB_Info CFL_matrix_from_base_lazy(Matrix **matrix_p, GrB_Matrix base) {
     matrix->is_lazy = true;
     TRY(LAGraph_Calloc(
         (void **)&matrix->base_matrices, 40, sizeof(CFL_Matrix *),
-        NULL)); // this is enough for this centry i guess, because 40th matrices must
-                // have 10^40 nvals for being putten in base_matrices, this is 2^132
+        NULL)); // Initial storage; addition and copying resize it as needed.
     matrix->base_matrices[0] = result;
     matrix->base_matrices_count = 1;
     matrix->base = NULL;
@@ -667,9 +730,12 @@ GrB_Info CFL_matrix_from_base_lazy(Matrix **matrix_p, GrB_Matrix base) {
 GrB_Info CFL_matrix_create(Matrix **matrix, GrB_Index nrows, GrB_Index ncols) {
     GrB_Matrix _result;
     TRY(GrB_Matrix_new(&_result, GrB_BOOL, nrows, ncols));
-    TRY(CFL_matrix_from_base(matrix, _result));
+    GrB_Info info = CFL_matrix_from_base(matrix, _result);
+    if (info < GrB_SUCCESS) {
+        GrB_Matrix_free(&_result);
+    }
 
-    return GrB_SUCCESS;
+    return info;
 }
 
 GrB_Info CFL_matrix_create_lazy(Matrix **matrix, GrB_Index nrows, GrB_Index ncols) {
@@ -716,6 +782,7 @@ GrB_Info matrix_mxm(Matrix *output, Matrix *first, Matrix *second, bool accum,
     // CFL_matrix_update(output);
     TRY(GrB_mxm(output->base, GrB_NULL, accum ? GxB_ANY_BOOL : GrB_NULL,
                 GxB_ANY_PAIR_BOOL, left->base, right->base, GrB_NULL));
+    TRY(matrix_drop_other_format(output));
     // IS_ISO(output->base, "MXM output");
     TRY(CFL_matrix_update(output));
 
@@ -848,8 +915,24 @@ GrB_Info matrix_mxm_block(Matrix *output, Matrix *first, Matrix *second, bool ac
     }
 
     if (first->block_type == CELL && second->block_type == CELL) {
-        TRY(matrix_mxm_lazy(output, first, second, accum, swap, optimizations));
-        return GrB_SUCCESS;
+        if (output->block_type == CELL) {
+            TRY(matrix_mxm_lazy(output, first, second, accum, swap, optimizations));
+            return GrB_SUCCESS;
+        }
+
+        // N_i -> A B: compute the square product and add it to every output block.
+        Matrix *temp;
+        TRY(CFL_matrix_create(&temp, swap ? second->nrows : first->nrows,
+                              swap ? first->ncols : second->ncols));
+        GrB_Info info = matrix_mxm_lazy(temp, first, second, false, swap, optimizations);
+        if (info >= GrB_SUCCESS && !accum) {
+            info = matrix_clear_empty(output, optimizations);
+        }
+        if (info >= GrB_SUCCESS) {
+            info = matrix_wise_block(output, output, temp, false, optimizations);
+        }
+        TRY(CFL_matrix_free(&temp));
+        return info;
     }
 
     if (first->block_type == CELL) {
@@ -860,6 +943,9 @@ GrB_Info matrix_mxm_block(Matrix *output, Matrix *first, Matrix *second, bool ac
         TRY(CFL_matrix_create(&temp, swap ? second->nrows : first->nrows,
                               swap ? first->ncols : second->ncols));
         TRY(matrix_mxm_lazy(temp, first, second, accum, swap, optimizations));
+        if (!accum) {
+            TRY(matrix_clear_empty(output, optimizations));
+        }
         TRY(matrix_wise_block(output, output, temp, false, optimizations));
         TRY(CFL_matrix_free(&temp));
 
@@ -874,6 +960,9 @@ GrB_Info matrix_mxm_block(Matrix *output, Matrix *first, Matrix *second, bool ac
         TRY(CFL_matrix_create(&temp, swap ? second->nrows : first->nrows,
                               swap ? first->ncols : first->ncols));
         TRY(matrix_mxm_lazy(temp, first, second, accum, swap, optimizations));
+        if (!accum) {
+            TRY(matrix_clear_empty(output, optimizations));
+        }
         TRY(matrix_wise_block(output, output, temp, false, optimizations));
         TRY(CFL_matrix_free(&temp));
 
@@ -893,6 +982,9 @@ GrB_Info matrix_mxm_block(Matrix *output, Matrix *first, Matrix *second, bool ac
     Matrix *temp;
     TRY(CFL_matrix_create(&temp, first->nrows, first->ncols));
     TRY(matrix_mxm_lazy(temp, first, diag, false, swap, optimizations));
+    if (!accum) {
+        TRY(matrix_clear_empty(output, optimizations));
+    }
     TRY(matrix_wise_block(output, output, temp, false, optimizations));
 
     TRY(CFL_matrix_free(&temp));
@@ -1042,9 +1134,18 @@ GrB_Info matrix_wise_lazy(Matrix *output, Matrix *first, Matrix *second, bool ac
     TRY(CFL_matrix_create(&other, output->nrows, output->ncols));
     TRY(matrix_dup_empty(other, second, optimizations));
 
-    size_t other_nvals = other->nvals >= 10 ? other->nvals : 10;
+    // Reserve before merging so allocation failure leaves the components intact.
+    GrB_Info info = LAGraph_Realloc((void **)&first->base_matrices,
+                                    first->base_matrices_count + 1,
+                                    first->base_matrices_count, sizeof(Matrix *), NULL);
+    if (info < GrB_SUCCESS) {
+        TRY(CFL_matrix_free(&other));
+        return info;
+    }
 
     while (true) {
+        // A merge changes other's size and can make another component comparable.
+        size_t other_nvals = other->nvals >= 10 ? other->nvals : 10;
         bool found = false;
 
         for (size_t i = 0; i < first->base_matrices_count; i++) {
@@ -1147,6 +1248,7 @@ GrB_Info matrix_wise_block(Matrix *output, Matrix *first, Matrix *second, bool a
 GrB_Info matrix_rsub(Matrix *output, Matrix *mask) {
     TRY(GrB_eWiseAdd(output->base, mask->base, GrB_NULL, GxB_ANY_BOOL, output->base,
                      output->base, GrB_DESC_RSC));
+    TRY(matrix_drop_other_format(output));
 
     TRY(CFL_matrix_update(output));
 

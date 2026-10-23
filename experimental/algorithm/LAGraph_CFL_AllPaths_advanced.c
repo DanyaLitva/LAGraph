@@ -6,6 +6,7 @@
         } \
     } \
     LAGraph_Free((void**)&outputs_reachability, NULL); \
+    LAGraph_Free((void**)&reachability_matrices, NULL); \
     LAGraph_Free((void **)&T, NULL); \
     GrB_free(&false_scalar); \
     GrB_free(&identity_matrix); \
@@ -188,6 +189,7 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
     GrB_Matrix* T = NULL;
     GrB_Scalar false_scalar = NULL;
     GrB_Matrix* outputs_reachability = NULL;
+    GrB_Matrix* reachability_matrices = NULL;
     bool* t_empty_flags = NULL;    
     LAGraph_rule_EWCNF* new_rules = NULL;
     size_t new_rules_count = 0;
@@ -238,8 +240,13 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
     LAGraph_Calloc((void**)&outputs_reachability, symbols_amount, sizeof(GrB_Matrix), msg);
     LG_TRY(LAGraph_CFL_reachability_adv(outputs_reachability, adj_matrices, symbols_amount, rules, rules_count, msg, optimizations));
 
+    LG_TRY(LAGraph_Calloc((void**)&reachability_matrices, symbols_amount, sizeof(GrB_Matrix), msg));
     for (size_t i = 0; i < symbols_amount; i++) {
-        GrB_set(outputs_reachability[i], GrB_ROWMAJOR, GrB_STORAGE_ORIENTATION_HINT);
+        reachability_matrices[i] = outputs_reachability[i] != NULL ? outputs_reachability[i] : adj_matrices[i];
+        if (outputs_reachability[i] != NULL) {
+            GRB_TRY(GrB_set(outputs_reachability[i], GrB_ROWMAJOR,
+                            GrB_STORAGE_ORIENTATION_HINT));
+        }
     }
     
     for (size_t i = 0; i < rules_count; i++) {
@@ -341,7 +348,7 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
 
     for (size_t i = 0; i < symbols_amount; i++) {
             GrB_Index temp_nvals = 0;
-            GrB_Matrix_nvals(&temp_nvals, outputs_reachability[i]);
+            GRB_TRY(GrB_Matrix_nvals(&temp_nvals, reachability_matrices[i]));
             if (temp_nvals != 0) {
                 t_empty_flags[i] = false;
         }
@@ -355,7 +362,8 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
         GrB_BinaryOp acc_op = t_empty_flags[bin_rule.nonterm] ? GrB_NULL : AllPaths_add;
         GRB_TRY(GrB_mxm(
             T[bin_rule.nonterm], GrB_NULL, acc_op,
-            AllPaths_semiring, outputs_reachability[bin_rule.prod_A], outputs_reachability[bin_rule.prod_B],
+            AllPaths_semiring, reachability_matrices[bin_rule.prod_A],
+            reachability_matrices[bin_rule.prod_B],
             GrB_NULL
         ));
     }
