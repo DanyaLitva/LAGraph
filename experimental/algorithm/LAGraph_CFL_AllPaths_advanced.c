@@ -240,13 +240,14 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
     LAGraph_Calloc((void**)&outputs_reachability, symbols_amount, sizeof(GrB_Matrix), msg);
     LG_TRY(LAGraph_CFL_reachability_adv(outputs_reachability, adj_matrices, symbols_amount, rules, rules_count, msg, optimizations));
 
+    int32_t format;
+    GRB_TRY(GrB_get(adj_matrices[0], &format, GrB_STORAGE_ORIENTATION_HINT));
+
     LG_TRY(LAGraph_Calloc((void**)&reachability_matrices, symbols_amount, sizeof(GrB_Matrix), msg));
     for (size_t i = 0; i < symbols_amount; i++) {
-        reachability_matrices[i] = outputs_reachability[i] != NULL
-                                       ? outputs_reachability[i]
-                                       : adj_matrices[i];
+        reachability_matrices[i] = outputs_reachability[i] != NULL ? outputs_reachability[i] : adj_matrices[i];
         if (outputs_reachability[i] != NULL) {
-            GRB_TRY(GrB_set(outputs_reachability[i], GrB_ROWMAJOR,
+            GRB_TRY(GrB_set(outputs_reachability[i], format,
                             GrB_STORAGE_ORIENTATION_HINT));
         }
     }
