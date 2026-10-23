@@ -27,18 +27,6 @@
         GrB_free(&IPathIndex_set);                                                      \
     }
 
-#define LG_FREE_ALL                                                                     \
-    {                                                                                   \
-        LG_FREE_WORK;                                                                   \
-        if (outputs_initialized) {                                                      \
-            for (size_t i = 0; i < symbols_amount; i++) {                              \
-                GrB_free(&outputs[i]);                                                  \
-            }                                                                           \
-        }                                                                               \
-        if (path_index_type_created)                                                     \
-            GrB_free(path_index_t);                                                      \
-    }
-
 #include "LG_internal.h"
 #include <LAGraphX.h>
 
@@ -150,7 +138,6 @@ GrB_Info LAGraph_CFL_single_path_adv(
     size_t *term_rules = NULL, term_rules_count = 0;
     size_t *bin_rules = NULL, bin_rules_count = 0;
     bool *t_empty_flags = NULL;
-    bool outputs_initialized = false;
     bool path_index_type_created = false;
 
 #if GxB_IMPLEMENTATION < GxB_VERSION(9, 4, 5)
@@ -173,13 +160,15 @@ GrB_Info LAGraph_CFL_single_path_adv(
 
     for (size_t i = 0; i < symbols_amount; i++)
         outputs[i] = NULL;
-    outputs_initialized = true;
 
     LG_TRY(LAGraph_Calloc((void **)&outputs_reachability, symbols_amount,
                           sizeof(GrB_Matrix), msg));
     LG_TRY(LAGraph_CFL_reachability_adv(outputs_reachability, adj_matrices,
                                         symbols_amount, rules, rules_count, msg,
                                         optimizations));
+
+    int32_t format;
+    GRB_TRY(GrB_get(adj_matrices[0], &format, GrB_STORAGE_ORIENTATION_HINT));
 
     LG_TRY(LAGraph_Calloc((void **)&reachability_matrices, symbols_amount,
                           sizeof(GrB_Matrix), msg));
@@ -188,7 +177,7 @@ GrB_Info LAGraph_CFL_single_path_adv(
                                        ? outputs_reachability[i]
                                        : adj_matrices[i];
         if (outputs_reachability[i] != NULL)
-            GRB_TRY(GrB_set(outputs_reachability[i], GrB_ROWMAJOR,
+            GRB_TRY(GrB_set(outputs_reachability[i], format,
                             GrB_STORAGE_ORIENTATION_HINT));
     }
 
@@ -331,12 +320,9 @@ GrB_Info LAGraph_CFL_single_path_adv(
         if (t_empty_flags[bin_rule.prod_A] || t_empty_flags[bin_rule.prod_B])
             continue;
 
-        GrB_BinaryOp accum = t_empty_flags[bin_rule.nonterm]
-                                 ? GrB_NULL
-                                 : PathIndex_add;
-        GRB_TRY(GrB_mxm(
-            T[bin_rule.nonterm], GrB_NULL, accum, PathIndex_semiring,
-            T[bin_rule.prod_A], T[bin_rule.prod_B], GrB_NULL));
+        GrB_BinaryOp accum = t_empty_flags[bin_rule.nonterm] ? GrB_NULL : PathIndex_add;
+        GRB_TRY(GrB_mxm(T[bin_rule.nonterm], GrB_NULL, accum, PathIndex_semiring,
+        T[bin_rule.prod_A], T[bin_rule.prod_B], GrB_NULL));
         t_empty_flags[bin_rule.nonterm] = false;
     }
 
