@@ -324,7 +324,7 @@ GrB_Info LAGraph_CFL_AllPaths(
     AllPaths_type,
     AllPaths_type));
 
-  GRB_TRY(GrB_Monoid_new(
+  GRB_TRY(GrB_Monoid_new_UDT(
     &AllPaths_monoid,
     AllPaths_add,
     (void*)(&bottom)));
