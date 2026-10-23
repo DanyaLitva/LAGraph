@@ -226,7 +226,7 @@ GrB_Info LAGraph_CFL_single_path_adv(
 
     GRB_TRY(GrB_BinaryOp_new(&PathIndex_add, (void *)add_path_index_adv,
                              PathIndex_type, PathIndex_type, PathIndex_type));
-    GRB_TRY(GrB_Monoid_new(&PathIndex_monoid, PathIndex_add, &bottom));
+    GRB_TRY(GrB_Monoid_new_UDT(&PathIndex_monoid, PathIndex_add, &bottom));
     GRB_TRY(GxB_IndexBinaryOp_new(&IPathIndex_mult, (void *)mult_path_index_adv,
                                   PathIndex_type, PathIndex_type, PathIndex_type,
                                   GrB_BOOL, "mult_path_index_adv",
@@ -326,13 +326,9 @@ GrB_Info LAGraph_CFL_single_path_adv(
         t_empty_flags[bin_rule.nonterm] = false;
     }
 
-    for (size_t i = 0; i < symbols_amount; i++)
-        GRB_TRY(GrB_Matrix_wait(T[i], GrB_MATERIALIZE));
-
     for (size_t i = 0; i < symbols_amount; i++) {
-        if (outputs_reachability[i] == NULL)
-            continue;
         outputs[i] = T[i];
+        GrB_Matrix_wait(outputs[i], GrB_MATERIALIZE);
     }
 
     LG_FREE_WORK;

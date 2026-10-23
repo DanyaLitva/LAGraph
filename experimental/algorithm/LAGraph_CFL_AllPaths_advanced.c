@@ -224,7 +224,7 @@ GrB_Info LAGraph_CFL_AllPaths_adv(
     GRB_TRY(GrB_Scalar_setElement_UDT(bottom_scalar, (void*)(&bottom)));
 
     GRB_TRY(GrB_BinaryOp_new(&AllPaths_add, (void*)add_all_paths, AllPaths_type, AllPaths_type, AllPaths_type));
-    GRB_TRY(GrB_Monoid_new(&AllPaths_monoid, AllPaths_add, (void*)(&bottom)));
+    GRB_TRY(GrB_Monoid_new_UDT(&AllPaths_monoid, AllPaths_add, (void*)(&bottom)));
 
     GRB_TRY(GxB_IndexBinaryOp_new(&IAllPaths_mult, (void*)mult_all_paths_post, AllPaths_type, 
                                   GrB_BOOL, GrB_BOOL, GrB_BOOL, "mult_all_paths_post", MULT_PATH_POST_INDEX_DEFN));
